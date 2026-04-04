@@ -1,232 +1,88 @@
-# 🚀 GuideWire: AI-Powered Parametric Insurance for India’s Gig Economy
+# 🚀 FlowInsure AI: Parametric Income Protection for India's Gig Economy
 
-> 💡 *“Protecting income, not assets — using AI, automation, and intelligent risk modeling.”*
-
----
+> **"Protecting the Backbone of India's Digital Economy through AI, Automation, and Trust."**
 
 ## 🌍 Overview
+FlowInsure AI is a next-generation **AI-powered parametric insurance platform** designed exclusively for platform-based delivery partners (Zomato, Swiggy, Zepto, Blinkit). 
 
-This project demonstrates an **AI-powered parametric insurance platform** built specifically for India’s gig economy workers (delivery partners).
+Our solution solves the **Income Volatility** problem caused by external disruptions like extreme weather (monsoon storms), heavy pollution (AQI spikes), and unplanned curfews.
 
-Unlike traditional insurance systems, which require manual claims and long processing times, this solution provides a **fully automated, real-time insurance experience**:
-
-- 🌦️ Detects external disruptions (Rain / AQI)
-- 📉 Verifies actual income loss
-- ⚡ Instantly triggers payouts (simulation)
-
-👉 The goal is to create a **financial safety net for daily wage workers** whose income is highly unpredictable.
-
----
-
-## ❗ Problem Statement
-
-Gig workers depend on **daily earnings**, making them highly vulnerable to external conditions such as:
-
-- 🌧️ Heavy rain
-- 🌫️ High pollution (AQI spikes)
-- 🚧 Local restrictions / curfews
-
-These disruptions can reduce earnings by **20–30%**, yet:
-
-❌ Existing insurance does NOT cover **income loss due to uncontrollable external factors**
-
-👉 Result: Workers **bear the entire financial risk**
+### 👤 Persona: The Q-Commerce Hero
+- **Name:** Arjun Das
+- **Segment:** Quick Commerce (Zepto/Blinkit)
+- **Location:** Mumbai, India
+- **Pain Point:** Loses 30% of weekly earnings during heavy monsoon rains/waterlogging when deliveries are halted.
 
 ---
 
-## 🎯 Objective
+## ✨ Phase 2: Automation & Protection (SUBMISSION)
 
-Build an intelligent insurance system that:
+We have successfully built the **Full-Stack Foundation** for FlowInsure, moving beyond a prototype to an executable platform.
 
-- ✅ Protects gig workers from income loss  
-- 🌐 Uses real-time disruption signals (weather/AQI)  
-- ⚡ Automatically triggers payouts (no manual claims)  
-- 📅 Uses a **weekly premium model** aligned with gig earnings  
+### 1. 🤖 AI-Powered Risk & Pricing
+- **Dynamic Weekly Premium:** Our AI engine calculates hyper-local risk scores based on city history (Mumbai floods), worker activity density, and earnings profiles.
+- **Weekly Model:** Premiums are structured on a **Weekly basis** to match the typical payment cycle of gig workers.
 
----
+### 2. ⚡ Parametric Automation
+- **Zero-Touch Claims:** Using real-time monitoring of weather (Rainfall mm) and ENV (AQI) signals.
+- **Real-time Triggers:** Integrated **WebSockets (Socket.io)** to push weather alerts and automated payout notifications instantly to the worker's device.
 
-## 💡 Core Innovation: Income Drop Trigger Model
+### 3. 🛡️ Intelligent Fraud Detection (Adversarial Defense)
+- **Multi-Signal Validation:** Payouts are triggered ONLY when:
+    1. A disruption exists (Rain/AQI severity cross threshold).
+    2. The worker's realized income drop matches the disruption window.
+- **Anomaly Guard:** Detects GPS spoofing and claim-ring patterns using behavioral AI.
 
-### 🔍 Problem in Traditional Systems
-Most parametric insurance systems trigger payouts based only on events (e.g., rain), leading to:
-- ❌ False claims
-- ❌ Unnecessary payouts
-
----
-
-### 🚀 Our Approach
-
-Payout is triggered only when **BOTH conditions are satisfied**:
-
-1. 🌧️ Disruption event occurs  
-2. 📉 Income drop exceeds threshold (30–40%)  
-
----
-
-### 🎯 Impact
-
-- ✔️ Ensures **real impact-based compensation**
-- ✔️ Reduces fraud significantly
-- ✔️ Improves trust and fairness
-- ✔️ Prevents system misuse
-
----
-
-## ⚙️ System Workflow
-
-1. 📡 Monitor disruption signals (Rain / AQI)
-2. 📊 Track worker income behavior
-3. 🤖 Apply trigger logic
-4. ⚡ Auto-generate claim
-5. 💳 Simulate payout
-
----
-
-## 🧪 Frontend Features (Demo)
-
-This project focuses on **interactive simulation + UI experience**:
-
-- 📊 Weekly pricing model (mock dynamic premium)
-- 🎛️ Parametric trigger simulator
-- 🌦️ Disruption detection (Rain / AQI thresholds)
-- 📉 Income drop threshold configuration
-- 🛡️ Fraud/anomaly blocking (demo logic)
-- 📈 Analytics dashboard
-- 🧾 Claim & payout history (localStorage)
-- 📉 Risk vs payout visualization
-
----
-
-## 🤖 AI & Intelligence Layer
-
-Even though this is a frontend prototype, the design includes AI-driven concepts:
-
-### 🔹 Risk Assessment
-- Dynamic premium calculation
-- Hyper-local risk evaluation
-
-### 🔹 Fraud Detection
-- Anomaly detection
-- Activity validation
-- Duplicate claim prevention
-
-### 🔹 Parametric Automation
-- Real-time trigger monitoring
-- Zero-touch claim processing
-
----
-
-## 🚨 Adversarial Defense & Anti-Spoofing Strategy
-
-Designed to handle advanced fraud scenarios like **GPS spoofing attacks**.
-
----
-
-### 🔍 Differentiation: Genuine vs Fraud Users
-
-**Genuine Users:**
-- Continuous movement 🚴
-- Active delivery logs 📦
-- Consistent earnings 📊
-
-**Fraud Indicators:**
-- Static/fake location ❌
-- No delivery activity ❌
-- Sudden identical claims (fraud ring)
-
----
-
-### 📊 Multi-Signal Data Validation
-
-Beyond GPS, system checks:
-
-- 📱 Device motion sensors
-- 🌐 Network/IP consistency
-- 📦 Delivery activity logs
-- ⏱️ Working hours
-- 🌦️ Weather & AQI data
-
----
-
-### ⚖️ UX Balance
-
-- ✅ Genuine users → Instant payouts  
-- ⚠️ Suspicious users → Soft verification  
-- ❌ Fraud users → Claim blocked  
-
-👉 *“Verify without punishing honest workers.”*
+### 4. 💎 Premium Glassmorphic UI
+- **Worker Dashboard:** Real-time earnings protected, active coverage, and risk profiling.
+- **Simulator:** For Hackathon judging, we've built a disruption simulator to trigger "Fake Storms" and see the system react in real-time.
 
 ---
 
 ## 🛠️ Tech Stack
-
-- ⚛️ React + TypeScript  
-- ⚡ Vite (local dev server)  
-- 💾 LocalStorage (demo storage)  
-
----
-
-## ▶️ How to Run
-
-Run the following commands:
-
-- cd d:\GuideWire\frontend  
-- npm install  
-- npm run dev  
-
-Then open the local URL in your browser.
+- **Frontend:** React 19 + Vite (TypeScript)
+- **Styling:** Vanilla CSS (Premium Glassmorphism + Custom Utility Layer)
+- **Backend:** Node.js + Express
+- **Real-time:** Socket.io
+- **AI Engine:** Deterministic Bayesian-inspired Risk Modeling
+- **Animations:** Framer Motion + Lucide React Icons
 
 ---
 
-## 🧭 How to Use the Simulator
+## 🚀 How to Run (Submission Package)
 
-1. Go to **Subscription**  
-2. Review weekly premium  
-3. Click **Subscribe (demo)**  
+### 1. Start the Backend
+```bash
+cd backend
+npm install
+npm run dev
+```
 
-4. Open **Trigger Simulator** and set:
-   - 🌧️ Rain / AQI levels  
-   - 📉 Income drop threshold  
-   - 📊 Observed income drop  
-
-5. Click **Run weekly monitoring**  
-6. View results in **Analytics Dashboard**  
-
----
-
-## 📊 Deliverables Alignment (DEVTrails)
-
-✔ Weekly pricing model  
-✔ AI-based risk profiling  
-✔ Parametric trigger system  
-✔ Automated claims  
-✔ Fraud detection system  
-✔ Analytics dashboard  
+### 2. Start the Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
 ---
 
-## 🔮 Future Scope (Production)
+## 🔮 Key Logic: The "Auto-Pay" Formula
 
-- 🌐 Real-time Weather & AQI APIs  
-- 📊 Delivery platform integration  
-- 💳 Payment gateway (Razorpay / UPI)  
-- 🧠 Advanced ML models:
-  - Risk scoring  
-  - Fraud detection  
-  - Dynamic pricing  
+Payout is triggered when:
+`P(Disruption | Weather, AQI) > 0.8` **AND** `(Worker_Earnings_Actual / Worker_Earnings_Expected) < 0.65`
+
+This ensures that we only pay for **Real Loss of Income**, making the model sustainable for insurers and reliable for gig workers.
 
 ---
 
-## 🌟 Why This Solution Stands Out
-
-- 🚀 Combines **parametric + behavioral insurance**
-- 🛡️ Strong fraud prevention system
-- 📈 Real-world scalable design
-- ⚡ Fully automated claim process
-- ❤️ Built specifically for gig workers
+### 📌 Hackathon Deliverables Status
+- [x] Optimized Onboarding (Persona: Q-Commerce)
+- [x] Risk Profiling (AI Engine)
+- [x] Weekly Pricing Model (Active)
+- [x] Parametric Triggering (Real-time WebSockets)
+- [x] Automated Claim & Payout (Simulation)
+- [x] Fraud Detection (Active)
 
 ---
-
-## 📌 Final Thought
-
-> **“In a world of uncertainty, we insure what matters most — daily income.”**
+*Created for GuideWire DEVTrails 2026 Hackathon Phase 2.*

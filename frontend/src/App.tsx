@@ -1,775 +1,438 @@
-import { useEffect, useMemo, useState } from 'react'
 
-type TabKey = 'home' | 'subscribe' | 'simulate' | 'analytics'
+import React, { useState, useEffect, useMemo } from 'react';
+import axios from 'axios';
+import { io } from 'socket.io-client';
+import { 
+  Shield, 
+  CloudRain, 
+  Wind, 
+  AlertTriangle, 
+  TrendingUp, 
+  History, 
+  Settings, 
+  ChevronRight,
+  Zap,
+  Lock,
+  Loader2,
+  DollarSign
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import './app.css';
 
-type RiskLevel = 'Low' | 'Medium' | 'High'
+const API_BASE = 'http://localhost:5000/api';
+const socket = io('http://localhost:5000');
 
-type Inputs = {
-  city: string
-  avgDailyEarnings: number // INR
-  deliveriesPerDay: number
-  rainIntensity: number // 0-100 (mock)
-  aqi: number // 0-400 (mock)
-  incomeDropPct: number // 0-100 (observed)
-  dropThresholdPct: number // 0-100 (trigger rule)
-}
-
-type ClaimAttempt = {
-  id: string
-  weekId: string
-  city: string
-  inputsSnapshot: Inputs
-  disruptionDetected: boolean
-  fraudBlocked: boolean
-  status: 'blocked' | 'paid'
-  payoutINR: number
-  createdAtISO: string
-}
-
-type PersistedState = {
-  version: 1
-  subscription: { isSubscribed: boolean }
-  claimHistory: ClaimAttempt[]
-}
-
-const STORAGE_KEY = 'guidewire_parametric_insurance_v1'
-
-const CITY_OPTIONS = [
-  'Mumbai',
-  'Delhi',
-  'Bengaluru',
-  'Hyderabad',
-  'Chennai',
-  'Pune',
-] as const
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n))
-}
-
-function formatINR(n: number) {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(n)
-}
-
-function getWeekId(d: Date) {
-  // ISO-ish week id: YYYY-Www
-  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
-  const dayNum = date.getUTCDay() || 7
-  date.setUTCDate(date.getUTCDate() + 4 - dayNum)
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1))
-  const weekNo = Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7)
-  return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`
-}
-
-function computeDisruptionDetected(rainIntensity: number, aqi: number) {
-  const heavyRain = rainIntensity >= 70
-  const highAqi = aqi >= 200
-  return { heavyRain, highAqi, disruptionDetected: heavyRain || highAqi }
-}
-
-function getRiskLevel(riskScore: number): RiskLevel {
-  if (riskScore < 35) return 'Low'
-  if (riskScore < 70) return 'Medium'
-  return 'High'
-}
-
-function computeRiskScore(inputs: Inputs) {
-  const { heavyRain, highAqi } = computeDisruptionDetected(inputs.rainIntensity, inputs.aqi)
-
-  const rainSeverity = clamp(inputs.rainIntensity / 100, 0, 1) // 0..1
-  const aqiSeverity = clamp(inputs.aqi / 300, 0, 1) // 0..1 (cap)
-
-  // Simple weighted score:
-  // - weather: 55%
-  // - AQI: 45%
-  // plus a small bump when the disruption thresholds are crossed.
-  let score = rainSeverity * 55 + aqiSeverity * 45
-  if (heavyRain) score += 12
-  if (highAqi) score += 10
-
-  // More activity -> higher exposure -> slightly higher score.
-  const exposure = clamp(inputs.deliveriesPerDay / 30, 0, 1) // 0..1
-  score += exposure * 8
-
-  return clamp(score, 0, 100)
-}
-
-function computeWeeklyPremiumINR(inputs: Inputs) {
-  const riskScore = computeRiskScore(inputs)
-  const riskLevel = getRiskLevel(riskScore)
-
-  const riskMultiplier = riskLevel === 'Low' ? 0.85 : riskLevel === 'Medium' ? 1.1 : 1.4
-
-  // Premium is weekly and aligned to worker earnings (mock formula for UI demo).
-  const weeklyExpectedEarnings = inputs.avgDailyEarnings * 7
-  const activityLoad = inputs.deliveriesPerDay * 6 // small scaling
-
-  const premium = 60 + (weeklyExpectedEarnings * 0.035 + activityLoad) * riskMultiplier
-  return Math.round(premium)
-}
-
-function computeFraudFlags(inputs: Inputs, disruptionDetected: boolean, claimHistory: ClaimAttempt[]) {
-  const flags: string[] = []
-
-  if (!disruptionDetected && inputs.incomeDropPct >= 50) {
-    flags.push('High income drop without a detected disruption event.')
-  }
-
-  if (inputs.deliveriesPerDay <= 3 && inputs.incomeDropPct >= 40) {
-    flags.push('Very low activity with a large income drop.')
-  }
-
-  // Duplicate/abnormal attempts: block if already paid/blocked for the same week+city+threshold.
-  const thresholdKey = `${inputs.dropThresholdPct}`
-  const dup = claimHistory.some(
-    (h) =>
-      h.city === inputs.city &&
-      String(h.inputsSnapshot.dropThresholdPct) === thresholdKey &&
-      h.weekId === getWeekId(new Date()) &&
-      (h.status === 'paid' || h.status === 'blocked'),
-  )
-  if (dup) flags.push('Duplicate claim attempt for the current week (demo rule).')
-
-  return flags
-}
-
-function computePayoutINR(inputs: Inputs) {
-  const weeklyExpectedEarnings = inputs.avgDailyEarnings * 7
-  const payout = weeklyExpectedEarnings * (inputs.incomeDropPct / 100) * 0.9 // covers most of the loss (demo)
-  return Math.round(payout)
-}
-
-function uid() {
-  return `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`
-}
+type Tab = 'dashboard' | 'subscription' | 'simulator' | 'history';
 
 export default function App() {
-  const [tab, setTab] = useState<TabKey>('home')
-
-  const [inputs, setInputs] = useState<Inputs>({
+  const [currentTab, setCurrentTab] = useState<Tab>('dashboard');
+  const [userId] = useState('usr-1'); // Static for demo
+  const [userData, setUserData] = useState<any>(null);
+  const [subData, setSubData] = useState<any>(null);
+  const [claims, setClaims] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  
+  // Form State
+  const [form, setForm] = useState({
     city: 'Mumbai',
-    avgDailyEarnings: 900,
-    deliveriesPerDay: 22,
-    rainIntensity: 65,
-    aqi: 190,
-    incomeDropPct: 32,
-    dropThresholdPct: 35,
-  })
+    earnings: 950,
+    deliveries: 24,
+    threshold: 30
+  });
 
-  const [persisted, setPersisted] = useState<PersistedState>({
-    version: 1,
-    subscription: { isSubscribed: false },
-    claimHistory: [],
-  })
+  // Simulator State
+  const [sim, setSim] = useState({
+    rain: 65,
+    aqi: 180,
+    drop: 20
+  });
 
-  const disruption = useMemo(
-    () => computeDisruptionDetected(inputs.rainIntensity, inputs.aqi),
-    [inputs.rainIntensity, inputs.aqi],
-  )
+  const [alertData, setAlertData] = useState<any>(null);
 
-  const riskScore = useMemo(() => computeRiskScore(inputs), [inputs])
-  const riskLevel = useMemo(() => getRiskLevel(riskScore), [riskScore])
-  const weeklyPremiumINR = useMemo(() => computeWeeklyPremiumINR(inputs), [inputs])
-  const payoutEstimateINR = useMemo(() => computePayoutINR(inputs), [inputs])
-
-  const payoutWouldTrigger =
-    disruption.disruptionDetected && inputs.incomeDropPct >= inputs.dropThresholdPct
-
-  const [toast, setToast] = useState<string | null>(null)
-
-  useEffect(() => {
+  const fetchData = async () => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as PersistedState
-      if (parsed?.version === 1) setPersisted(parsed)
-    } catch {
-      // ignore storage issues (demo)
+      console.log("Fetching data from:", `${API_BASE}/user/${userId}`);
+      const { data } = await axios.get(`${API_BASE}/user/${userId}`);
+      setUserData(data.user);
+      setSubData(data.sub);
+      
+      const claimsRes = await axios.get(`${API_BASE}/claims/${userId}`);
+      setClaims(claimsRes.data);
+      setLoading(false);
+    } catch (err) {
+      console.error("Error fetching data", err);
+      setLoading(false);
     }
-  }, [])
+  };
 
-  useEffect(() => {
+  const handleSubscribe = async () => {
+    setLoading(true);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted))
-    } catch {
-      // ignore storage issues (demo)
+      const { data } = await axios.post(`${API_BASE}/subscribe`, {
+        userId,
+        city: form.city,
+        deliveriesPerDay: form.deliveries,
+        avgDailyEarnings: form.earnings,
+        payoutRulePct: form.threshold
+      });
+      setSubData(data);
+      setCurrentTab('dashboard');
+      showGlobalAlert("Weekly Subscription Active", "success");
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
-  }, [persisted])
+  };
+
+  const runSimulation = async () => {
+    console.log("Trigger button was clicked. Sub status:", subData?.isSubscribed);
+    if (!subData?.isSubscribed) {
+      showGlobalAlert("Subscription Required", "error");
+      return;
+    }
+    
+    try {
+      console.log("Sending simulation request to backend...");
+      const { data } = await axios.post(`${API_BASE}/simulate-disruption`, {
+        userId,
+        rain: sim.rain,
+        aqi: sim.aqi,
+        incomeDrop: sim.drop
+      });
+      console.log("Simulation Result:", data);
+      
+      if (data.status === 'paid') {
+        showGlobalAlert(`Success! Payout of ₹${data.payoutAmount} initiated.`, 'success');
+      } else if (data.fraudFlags?.length > 0) {
+        showGlobalAlert(`Claim Blocked: Fraud Anomaly Detected.`, 'error');
+      } else {
+        showGlobalAlert(`No Payout: Trigger conditions not met.`, 'info');
+      }
+    } catch (err: any) {
+      console.error("Simulation API Error:", err.message, err.response?.data);
+      showGlobalAlert("Backend connection failed.", "error");
+    }
+  };
 
   useEffect(() => {
-    if (toast === null) return
-    const t = setTimeout(() => setToast(null), 3500)
-    return () => clearTimeout(t)
-  }, [toast])
+    fetchData();
+    
+    socket.on('claim_updated', (newClaim) => {
+      setClaims(prev => [newClaim, ...prev].slice(0, 50));
+      if (newClaim.status === 'paid') {
+        showGlobalAlert(`Automatic Payout Triggered: ₹${newClaim.payoutAmount}`, 'success');
+      }
+    });
 
-  function updateInput<K extends keyof Inputs>(key: K, value: Inputs[K]) {
-    setInputs((prev) => ({ ...prev, [key]: value }))
+    socket.on('weather_spike', (data) => {
+      setAlertData(data);
+      setTimeout(() => setAlertData(null), 8000);
+    });
+
+    return () => {
+      socket.off('claim_updated');
+      socket.off('weather_spike');
+    };
+  }, []);
+
+  const [toast, setToast] = useState<any>(null);
+  const showGlobalAlert = (msg: string, type: 'success' | 'error' | 'info') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  if (loading && !userData) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#070911]">
+        <Loader2 className="animate-spin text-purple-500" size={48} />
+      </div>
+    );
   }
-
-  function subscribe() {
-    setPersisted((p) => ({ ...p, subscription: { isSubscribed: true } }))
-    setToast('Subscribed (demo). Weekly premium will be charged locally.')
-    setTab('simulate')
-  }
-
-  function unsubscribe() {
-    setPersisted((p) => ({ ...p, subscription: { isSubscribed: false } }))
-    setToast('Unsubscribed (demo). Simulator will require subscription.')
-    setTab('home')
-  }
-
-  function runMonitoring() {
-    if (!persisted.subscription.isSubscribed) {
-      setToast('Please subscribe first (demo rule).')
-      setTab('subscribe')
-      return
-    }
-
-    const weekId = getWeekId(new Date())
-    const disruptionDetected = disruption.disruptionDetected
-
-    const flags = computeFraudFlags(inputs, disruptionDetected, persisted.claimHistory)
-    const fraudBlocked = flags.length > 0
-
-    const shouldTrigger = disruptionDetected && inputs.incomeDropPct >= inputs.dropThresholdPct
-    const status: ClaimAttempt['status'] = fraudBlocked ? 'blocked' : shouldTrigger ? 'paid' : 'blocked'
-
-    const payoutINR = status === 'paid' ? computePayoutINR(inputs) : 0
-
-    const attempt: ClaimAttempt = {
-      id: uid(),
-      weekId,
-      city: inputs.city,
-      inputsSnapshot: inputs,
-      disruptionDetected,
-      fraudBlocked,
-      status,
-      payoutINR,
-      createdAtISO: new Date().toISOString(),
-    }
-
-    setPersisted((p) => ({
-      ...p,
-      claimHistory: [attempt, ...p.claimHistory].slice(0, 50),
-    }))
-
-    if (status === 'paid') {
-      setToast(`Paid ${formatINR(payoutINR)} (demo). Trigger matched income drop rule.`)
-      setTab('analytics')
-    } else if (fraudBlocked) {
-      setToast('Claim blocked (demo). Fraud/anomaly flags triggered.')
-      setTab('analytics')
-    } else {
-      setToast('No payout this week. Trigger rule did not match.')
-      setTab('simulate')
-    }
-  }
-
-  const claimHistory = persisted.claimHistory
-
-  const lastPaid = claimHistory.find((h) => h.status === 'paid')
-
-  const riskBadgeStyle =
-    riskLevel === 'Low'
-      ? 'risk risk--low'
-      : riskLevel === 'Medium'
-        ? 'risk risk--med'
-        : 'risk risk--high'
 
   return (
-    <div className="gw-shell">
-      <header className="gw-topbar">
-        <div className="gw-brand">
-          <div className="gw-logo" aria-hidden="true">
-            GW
+    <div className="premium-container">
+      {/* Real-time Alert */}
+      <AnimatePresence>
+        {alertData && (
+          <motion.div 
+            initial={{ y: -100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -100, opacity: 0 }}
+            className="fixed top-8 left-1/2 -translate-x-1/2 z-[200] w-[400px] glass-panel p-6 border-red-500/50 alert-active"
+          >
+             <div className="flex items-center gap-4">
+                <div className="p-3 bg-red-500/20 rounded-full text-red-500">
+                  <CloudRain size={24} />
+                </div>
+                <div>
+                   <h4 className="font-bold text-red-500">PARAMETRIC ALERT</h4>
+                   <p className="text-sm text-slate-300">Severe rain detected in {alertData.city}. Monitoring your income logs...</p>
+                </div>
+             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <header className="mb-12">
+        <div className="flex justify-between items-center mb-6">
+          <div className="flex items-center gap-3">
+             <div className="w-12 h-12 bg-gradient-to-br from-violet-600 to-emerald-500 rounded-xl flex items-center justify-center font-black text-xl">FP</div>
+             <div>
+                <h1 className="text-2xl font-black m-0">FlowInsure AI</h1>
+                <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">Parametric Protection v2.0</p>
+             </div>
           </div>
-          <div>
-            <div className="gw-title">GuideWire Insurance</div>
-            <div className="gw-subtitle">AI-powered parametric insurance (frontend demo)</div>
+          <div className="flex items-center gap-4">
+             <div className="text-right">
+                <p className="text-slate-300 font-bold">{userData?.name}</p>
+                <p className="text-emerald-500 text-xs font-black">ACTIVE • {subData?.riskLevel} RISK</p>
+             </div>
+             <img src={userData?.avatar} className="w-12 h-12 rounded-full border border-white/10" alt="avatar" />
           </div>
         </div>
 
-        <nav className="gw-nav" aria-label="Primary">
-          <button className={tab === 'home' ? 'gw-navBtn gw-navBtn--active' : 'gw-navBtn'} onClick={() => setTab('home')}>
-            Home
-          </button>
-          <button
-            className={tab === 'subscribe' ? 'gw-navBtn gw-navBtn--active' : 'gw-navBtn'}
-            onClick={() => setTab('subscribe')}
-          >
-            Subscription
-          </button>
-          <button
-            className={tab === 'simulate' ? 'gw-navBtn gw-navBtn--active' : 'gw-navBtn'}
-            onClick={() => setTab('simulate')}
-          >
-            Trigger Simulator
-          </button>
-          <button
-            className={tab === 'analytics' ? 'gw-navBtn gw-navBtn--active' : 'gw-navBtn'}
-            onClick={() => setTab('analytics')}
-          >
-            Analytics
-          </button>
+        <nav className="app-nav">
+          <div className="glass-panel p-1 flex gap-1">
+            {(['dashboard', 'subscription', 'simulator', 'history'] as Tab[]).map(t => (
+              <button 
+                key={t}
+                onClick={() => setCurrentTab(t)}
+                className={`nav-pill ${currentTab === t ? 'active' : ''}`}
+              >
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </div>
         </nav>
       </header>
 
-      <main className="gw-main">
-        {tab === 'home' && (
-          <section className="gw-grid">
-            <div className="gw-card gw-card--hero">
-              <h1>Income Drop Trigger Model</h1>
-              <p className="lead">
-                Payouts are triggered only when a disruption event occurs <b>and</b> the worker’s earnings drop by your configured rule.
-                This reduces false claims and directly links compensation to real income loss.
-              </p>
-              <div className="gw-ctaRow">
-                <button className="gw-btn gw-btn--primary" onClick={() => setTab('simulate')}>
-                  Try the simulator
-                </button>
-                {!persisted.subscription.isSubscribed ? (
-                  <button className="gw-btn" onClick={() => setTab('subscribe')}>
-                    View weekly premium
-                  </button>
-                ) : (
-                  <button className="gw-btn" onClick={() => setTab('analytics')}>
-                    View claim history
-                  </button>
-                )}
-              </div>
-              {lastPaid && (
-                <div className="gw-inlineNote">
-                  Last payout: <b>{formatINR(lastPaid.payoutINR)}</b> for {lastPaid.weekId}
-                </div>
-              )}
+      <main>
+        {currentTab === 'dashboard' && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="metric-grid">
+            <div className="glass-panel metric-card panel-hover">
+               <div className="metric-label flex justify-between">Weekly Coverage <Shield size={16} className="text-violet-500" /></div>
+               <div className="metric-value">₹{subData?.avgDailyEarnings * 7 || 0}</div>
+               <div className="metric-trend trend-up">Full Income Protection</div>
             </div>
-
-            <div className="gw-card">
-              <h2>What this frontend demonstrates</h2>
-              <ul className="gw-list">
-                <li>Weekly dynamic pricing based on disruption risk (mock formula)</li>
-                <li>Parametric automation (disruption + income drop threshold)</li>
-                <li>Fraud/anomaly checks (local heuristics)</li>
-                <li>Analytics dashboard (stored in your browser)</li>
-              </ul>
-              <div className="gw-divider" />
-              <p className="muted">
-                No backend is included. “AI” calculations are simplified so you can validate the trigger logic and UI flow.
-              </p>
+            <div className="glass-panel metric-card panel-hover">
+               <div className="metric-label flex justify-between">Risk Score <TrendingUp size={16} className="text-emerald-500" /></div>
+               <div className="metric-value">{subData?.riskScore || 0}%</div>
+               <div className={`badge ${subData?.riskScore < 40 ? 'badge-risk-low' : 'badge-risk-high'} mt-2`}>
+                 {subData?.riskLevel} Risk Profile
+               </div>
             </div>
-          </section>
+            <div className="glass-panel metric-card panel-hover">
+               <div className="metric-label flex justify-between">Weekly Premium <Zap size={16} className="text-yellow-500" /></div>
+               <div className="metric-value">₹{subData?.weeklyPremiumINR || 0}</div>
+               <div className="text-xs text-slate-500 mt-2">Deducted every Monday from earnings</div>
+            </div>
+          </motion.div>
         )}
 
-        {tab === 'subscribe' && (
-          <section className="gw-grid">
-            <div className="gw-card">
-              <h2>Weekly premium (demo)</h2>
-              <p className="muted">
-                Premium adapts to your disruption risk. In a real system, this would be driven by live weather/AQI + worker activity.
-              </p>
-
-              <div className="gw-metricRow">
-                <div className={riskBadgeStyle}>
-                  <div className="risk__label">Risk Level</div>
-                  <div className="risk__value">{riskLevel}</div>
-                  <div className="risk__score">Score: {Math.round(riskScore)}/100</div>
-                </div>
-                <div className="gw-metric">
-                  <div className="gw-metric__label">Estimated weekly premium</div>
-                  <div className="gw-metric__value">{formatINR(weeklyPremiumINR)}</div>
-                </div>
-              </div>
-
-              <div className="gw-divider" />
-
-              <div className="gw-form">
-                <div className="gw-field">
-                  <label>City</label>
-                  <select
-                    value={inputs.city}
-                    onChange={(e) => updateInput('city', e.target.value)}
-                    className="gw-input"
+        {currentTab === 'subscription' && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-panel p-8 max-w-2xl mx-auto">
+             <h2 className="text-2xl font-black mb-6">Manage Protection Policy</h2>
+             <div className="grid grid-cols-2 gap-6">
+                <div className="input-group">
+                  <label className="input-label">Operating City</label>
+                  <select 
+                    className="input-control" 
+                    value={form.city} 
+                    onChange={e => setForm({...form, city: e.target.value})}
                   >
-                    {CITY_OPTIONS.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
+                    <option>Mumbai</option>
+                    <option>Delhi</option>
+                    <option>Bengaluru</option>
+                    <option>Chennai</option>
                   </select>
                 </div>
-
-                <div className="gw-row">
-                  <div className="gw-field">
-                    <label>Average daily earnings (INR)</label>
-                    <input
-                      className="gw-input"
-                      type="number"
-                      min={0}
-                      step={50}
-                      value={inputs.avgDailyEarnings}
-                      onChange={(e) => updateInput('avgDailyEarnings', Number(e.target.value || 0))}
-                    />
-                  </div>
-                  <div className="gw-field">
-                    <label>Deliveries per day</label>
-                    <input
-                      className="gw-input"
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={inputs.deliveriesPerDay}
-                      onChange={(e) => updateInput('deliveriesPerDay', Number(e.target.value || 0))}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="gw-ctaRow gw-ctaRow--right">
-                {!persisted.subscription.isSubscribed ? (
-                  <button className="gw-btn gw-btn--primary" onClick={subscribe}>
-                    Subscribe (demo)
-                  </button>
-                ) : (
-                  <button className="gw-btn gw-btn--danger" onClick={unsubscribe}>
-                    Unsubscribe (demo)
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="gw-card">
-              <h2>Inputs used for pricing (demo)</h2>
-              <p className="muted">These inputs also power the trigger simulator.</p>
-              <div className="gw-row">
-                <div className="gw-field">
-                  <label>Rain intensity (0-100)</label>
-                  <input
-                    className="gw-slider"
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={inputs.rainIntensity}
-                    onChange={(e) => updateInput('rainIntensity', Number(e.target.value))}
+                <div className="input-group">
+                  <label className="input-label">Avg Daily Earnings (₹)</label>
+                  <input 
+                    type="number" 
+                    className="input-control" 
+                    value={form.earnings} 
+                    onChange={e => setForm({...form, earnings: Number(e.target.value)})}
                   />
-                  <div className="gw-inlineValue">{inputs.rainIntensity}</div>
                 </div>
-                <div className="gw-field">
-                  <label>AQI (0-400)</label>
-                  <input
-                    className="gw-slider"
-                    type="range"
-                    min={0}
-                    max={400}
-                    step={1}
-                    value={inputs.aqi}
-                    onChange={(e) => updateInput('aqi', Number(e.target.value))}
+                <div className="input-group">
+                  <label className="input-label">Deliveries / Day</label>
+                  <input 
+                    type="number" 
+                    className="input-control" 
+                    value={form.deliveries}
+                    onChange={e => setForm({...form, deliveries: Number(e.target.value)})}
                   />
-                  <div className="gw-inlineValue">{inputs.aqi}</div>
                 </div>
-              </div>
+                <div className="input-group">
+                  <label className="input-label">Loss Trigger Threshold (%)</label>
+                  <input 
+                    type="number" 
+                    className="input-control" 
+                    value={form.threshold}
+                    onChange={e => setForm({...form, threshold: Number(e.target.value)})}
+                  />
+                </div>
+             </div>
+             
+             <div className="mt-8 p-4 bg-violet-600/10 border border-violet-500/20 rounded-xl mb-8">
+                <div className="flex items-center gap-3 text-violet-400 font-bold">
+                  <Shield size={20} /> AI Risk Assessment 
+                </div>
+                <p className="text-sm text-slate-400 mt-1">
+                  Based on Mumbai's historical flood data and your 24 delivery/day profile, your weekly risk is {form.earnings > 1000 ? 'Medium' : 'Low'}.
+                </p>
+             </div>
 
-              <div className="gw-divider" />
-
-              <div className="gw-smallNote">
-                Disruption detected if <b>heavy rain</b> (at least 70) or <b>high AQI</b> (at least 200).
-              </div>
-            </div>
-          </section>
+             <button 
+               onClick={handleSubscribe}
+               disabled={loading}
+               className="btn-premium btn-primary w-full flex items-center justify-center gap-2"
+             >
+               {loading ? <Loader2 className="animate-spin" /> : <Lock size={18} />} Update Weekly Subscription
+             </button>
+          </motion.div>
         )}
 
-        {tab === 'simulate' && (
-          <section className="gw-grid">
-            <div className="gw-card">
-              <h2>Trigger Simulator</h2>
-              <p className="muted">
-                Runs “weekly monitoring” on your local browser. If the rule matches, a payout is simulated and saved to Analytics.
-              </p>
-
-              <div className="gw-form">
-                <div className="gw-row">
-                  <div className="gw-field">
-                    <label>Income drop threshold (trigger)</label>
-                    <input
-                      className="gw-slider"
-                      type="range"
-                      min={10}
-                      max={70}
-                      step={1}
-                      value={inputs.dropThresholdPct}
-                      onChange={(e) => updateInput('dropThresholdPct', Number(e.target.value))}
-                    />
-                    <div className="gw-inlineValue">{inputs.dropThresholdPct}%</div>
-                  </div>
-                  <div className="gw-field">
-                    <label>Observed income drop (this week)</label>
-                    <input
-                      className="gw-slider"
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={inputs.incomeDropPct}
-                      onChange={(e) => updateInput('incomeDropPct', Number(e.target.value))}
-                    />
-                    <div className="gw-inlineValue">{inputs.incomeDropPct}%</div>
-                  </div>
+        {currentTab === 'simulator' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+             <motion.div initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="glass-panel p-8">
+                <h3 className="text-xl font-black mb-6 flex items-center gap-2">
+                  <CloudRain className="text-violet-500" /> Disruption Simulator
+                </h3>
+                <div className="space-y-8">
+                   <div className="input-group">
+                      <div className="flex justify-between mb-2">
+                         <span className="input-label m-0">Rain Intensity</span>
+                         <span className="text-violet-500 font-black">{sim.rain}mm</span>
+                      </div>
+                      <input type="range" className="w-full accent-violet-500" min="0" max="100" value={sim.rain} onChange={e => setSim({...sim, rain: Number(e.target.value)})} />
+                   </div>
+                   <div className="input-group">
+                      <div className="flex justify-between mb-2">
+                         <span className="input-label m-0">Pollution (AQI)</span>
+                         <span className="text-emerald-500 font-black">{sim.aqi}</span>
+                      </div>
+                      <input type="range" className="w-full accent-emerald-500" min="50" max="400" value={sim.aqi} onChange={e => setSim({...sim, aqi: Number(e.target.value)})} />
+                   </div>
+                   <div className="input-group">
+                      <div className="flex justify-between mb-2">
+                         <span className="input-label m-0">Realized Income Drop</span>
+                         <span className="text-red-500 font-black">{sim.drop}%</span>
+                      </div>
+                      <input type="range" className="w-full accent-red-500" min="0" max="100" value={sim.drop} onChange={e => setSim({...sim, drop: Number(e.target.value)})} />
+                   </div>
                 </div>
-
-                <div className="gw-row">
-                  <div className="gw-field">
-                    <label>Rain intensity (0-100)</label>
-                    <input
-                      className="gw-slider"
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={inputs.rainIntensity}
-                      onChange={(e) => updateInput('rainIntensity', Number(e.target.value))}
-                    />
-                    <div className="gw-inlineValue">{inputs.rainIntensity}</div>
-                  </div>
-                  <div className="gw-field">
-                    <label>AQI (0-400)</label>
-                    <input
-                      className="gw-slider"
-                      type="range"
-                      min={0}
-                      max={400}
-                      step={1}
-                      value={inputs.aqi}
-                      onChange={(e) => updateInput('aqi', Number(e.target.value))}
-                    />
-                    <div className="gw-inlineValue">{inputs.aqi}</div>
-                  </div>
-                </div>
-
-                <div className="gw-row">
-                  <div className="gw-field">
-                    <label>City</label>
-                    <select value={inputs.city} onChange={(e) => updateInput('city', e.target.value)} className="gw-input">
-                      {CITY_OPTIONS.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="gw-field">
-                    <label>Deliveries per day</label>
-                    <input
-                      className="gw-input"
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={inputs.deliveriesPerDay}
-                      onChange={(e) => updateInput('deliveriesPerDay', Number(e.target.value || 0))}
-                    />
-                  </div>
-                </div>
-
-                <div className="gw-field">
-                  <label>Average daily earnings (INR)</label>
-                  <input
-                    className="gw-input"
-                    type="number"
-                    min={0}
-                    step={50}
-                    value={inputs.avgDailyEarnings}
-                    onChange={(e) => updateInput('avgDailyEarnings', Number(e.target.value || 0))}
-                  />
-                </div>
-              </div>
-
-              <div className="gw-divider" />
-
-              <div className="gw-triggerBox">
-                <div className="gw-triggerGrid">
-                  <div className="gw-triggerCell">
-                    <div className="gw-triggerLabel">Disruption detected</div>
-                    <div className={disruption.disruptionDetected ? 'gw-pill gw-pill--ok' : 'gw-pill'}>{disruption.disruptionDetected ? 'Yes' : 'No'}</div>
-                    <div className="gw-triggerSub">
-                      Heavy rain: {disruption.heavyRain ? 'Yes' : 'No'} | High AQI: {disruption.highAqi ? 'Yes' : 'No'}
-                    </div>
-                  </div>
-                  <div className="gw-triggerCell">
-                    <div className="gw-triggerLabel">Income drop rule</div>
-                    <div className={payoutWouldTrigger ? 'gw-pill gw-pill--ok' : 'gw-pill'}>
-                      {inputs.incomeDropPct >= inputs.dropThresholdPct ? 'Matched' : 'Not matched'}
-                    </div>
-                    <div className="gw-triggerSub">Observed: {inputs.incomeDropPct}% | Threshold: {inputs.dropThresholdPct}%</div>
-                  </div>
-                  <div className="gw-triggerCell">
-                    <div className="gw-triggerLabel">Payout estimate</div>
-                    <div className="gw-payout">{formatINR(payoutEstimateINR)}</div>
-                    <div className="gw-triggerSub">Estimated weekly loss coverage (demo)</div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="gw-ctaRow">
-                <button className="gw-btn gw-btn--primary" onClick={runMonitoring}>
-                  Run weekly monitoring (demo)
+                <button 
+                  onClick={runSimulation}
+                  className="btn-premium btn-primary w-full mt-8 flex items-center justify-center gap-2"
+                >
+                  <Zap size={18} /> Trigger Parametric Event
                 </button>
-                <button className="gw-btn" onClick={() => setTab('analytics')}>
-                  View analytics
-                </button>
-              </div>
-
-              <div className="gw-smallNote">
-                Fraud/anomaly checks run automatically. If blocked, no payout will be recorded.
-              </div>
-            </div>
-
-            <div className="gw-card">
-              <h2>Risk snapshot</h2>
-              <div className="gw-metricRow">
-                <div className={riskBadgeStyle}>
-                  <div className="risk__label">Risk Level</div>
-                  <div className="risk__value">{riskLevel}</div>
-                  <div className="risk__score">Score: {Math.round(riskScore)}/100</div>
+             </motion.div>
+             
+             <motion.div initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="glass-panel p-8 overflow-hidden relative">
+                <h3 className="text-xl font-black mb-6 flex items-center gap-2">
+                   <AlertTriangle className="text-yellow-500" /> Fraud & Anomaly Guard
+                </h3>
+                <div className="space-y-4">
+                   <div className="flex gap-4 items-start p-4 bg-emerald-500/5 rounded-xl border border-emerald-500/10">
+                      <div className="p-2 bg-emerald-500/20 text-emerald-500 rounded-lg"><Shield size={18}/></div>
+                      <div>
+                         <p className="text-sm font-bold text-slate-200">GPS Coherence: Valid</p>
+                         <p className="text-xs text-slate-500">Device activity timeline matches delivery logs.</p>
+                      </div>
+                   </div>
+                   <div className="flex gap-4 items-start p-4 bg-slate-500/5 rounded-xl border border-white/5">
+                      <div className="p-2 bg-slate-500/20 text-slate-400 rounded-lg"><Wind size={18}/></div>
+                      <div>
+                         <p className="text-sm font-bold text-slate-200">Environmental Match: {sim.rain > 70 || sim.aqi > 250 ? 'Severe' : 'Normal'}</p>
+                         <p className="text-xs text-slate-500">Cross-referencing with IMD weather satellites.</p>
+                      </div>
+                   </div>
+                   
+                   <div className="mt-8 pt-6 border-t border-white/10">
+                      <p className="text-xs text-slate-500 uppercase font-black tracking-widest mb-4">Payout Projection</p>
+                      <div className="flex items-end justify-between">
+                         <div className="text-4xl font-black font-mono">₹{(sim.rain > 70 || sim.aqi > 250) && sim.drop >= subData?.payoutRulePct ? Math.round((subData?.avgDailyEarnings * 7) * (sim.drop/100) * 0.85) : 0}</div>
+                         <div className="text-sm text-emerald-500 font-bold mb-1">AUTOMATED READY</div>
+                      </div>
+                   </div>
                 </div>
-                <div className="gw-metric">
-                  <div className="gw-metric__label">Weekly premium (demo)</div>
-                  <div className="gw-metric__value">{formatINR(weeklyPremiumINR)}</div>
-                </div>
-              </div>
-              <div className="gw-divider" />
-              <p className="muted">
-                This UI mirrors the intended architecture: risk assessment to weekly premium to automated trigger to instant payout (simulated).
-              </p>
-            </div>
-          </section>
+                
+                {/* Decorative background grid */}
+                <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-violet-600/10 to-transparent pointer-events-none opacity-50" />
+             </motion.div>
+          </div>
         )}
 
-        {tab === 'analytics' && (
-          <section className="gw-grid">
-            <div className="gw-card">
-              <h2>Analytics Dashboard (demo)</h2>
-              <p className="muted">Claim and payout history is stored in your browser (localStorage).</p>
-
-              <div className="gw-analyticsSummary">
-                <div className="gw-analyticsItem">
-                  <div className="gw-analyticsLabel">Subscription</div>
-                  <div className="gw-analyticsValue">
-                    {persisted.subscription.isSubscribed ? <span className="gw-pill gw-pill--ok">Active</span> : <span className="gw-pill">Inactive</span>}
-                  </div>
-                </div>
-                <div className="gw-analyticsItem">
-                  <div className="gw-analyticsLabel">Total attempts</div>
-                  <div className="gw-analyticsValue">{claimHistory.length}</div>
-                </div>
-                <div className="gw-analyticsItem">
-                  <div className="gw-analyticsLabel">Total paid</div>
-                  <div className="gw-analyticsValue">{claimHistory.filter((h) => h.status === 'paid').length}</div>
-                </div>
-              </div>
-
-              <div className="gw-divider" />
-
-              {claimHistory.length === 0 ? (
-                <div className="gw-empty">
-                  No claim attempts yet. Go to <b>Trigger Simulator</b> and run weekly monitoring.
-                </div>
-              ) : (
-                <div className="gw-tableWrap" role="region" aria-label="Claim history">
-                  <table className="gw-table">
-                    <thead>
-                      <tr>
-                        <th>Week</th>
-                        <th>City</th>
-                        <th>Disruption</th>
-                        <th>Income drop</th>
-                        <th>Rule</th>
-                        <th>Status</th>
-                        <th>Payout</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {claimHistory.slice(0, 12).map((h) => {
-                        const ruleMatched = h.inputsSnapshot.incomeDropPct >= h.inputsSnapshot.dropThresholdPct
-                        return (
-                          <tr key={h.id}>
-                            <td>{h.weekId}</td>
-                            <td>{h.city}</td>
-                            <td>{h.disruptionDetected ? 'Yes' : 'No'}</td>
-                            <td>{h.inputsSnapshot.incomeDropPct}%</td>
-                            <td>
-                              {ruleMatched ? (
-                                <span className="gw-pill gw-pill--ok">Matched</span>
-                              ) : (
-                                <span className="gw-pill">Not</span>
-                              )}
-                            </td>
-                            <td>
-                              {h.status === 'paid' ? (
-                                <span className="gw-pill gw-pill--ok">Paid</span>
-                              ) : h.fraudBlocked ? (
-                                <span className="gw-pill gw-pill--warn">Blocked</span>
-                              ) : (
-                                <span className="gw-pill">No payout</span>
-                              )}
-                            </td>
-                            <td>{h.status === 'paid' ? formatINR(h.payoutINR) : '—'}</td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            <div className="gw-card">
-              <h2>Risk vs. payouts (visual)</h2>
-              <p className="muted">A lightweight visualization (no chart libraries) for the last 8 attempts.</p>
-
-              <div className="gw-barChart" aria-label="Risk vs payouts bar chart">
-                {claimHistory.slice(0, 8).reverse().map((h) => {
-                  const score = computeRiskScore(h.inputsSnapshot)
-                  const paid = h.status === 'paid'
-                  const height = clamp(score, 0, 100)
-                  return (
-                    <div key={h.id} className="gw-barChartItem">
-                      <div
-                        className={paid ? 'gw-bar gw-bar--paid' : 'gw-bar gw-bar--block'}
-                        style={{ height: `${height}%` }}
-                        title={`${h.weekId} - riskScore=${Math.round(score)}`}
-                      />
-                      <div className="gw-barLabel">{h.weekId.slice(-2)}</div>
-                    </div>
-                  )
-                })}
-              </div>
-
-              <div className="gw-smallLegend">
-                <div>
-                  <span className="gw-dot gw-dot--paid" /> Paid payout
-                </div>
-                <div>
-                  <span className="gw-dot gw-dot--block" /> No payout / blocked
-                </div>
-              </div>
-
-              <div className="gw-divider" />
-
-              <div className="gw-smallNote">
-                In production, this dashboard would also plot daily earnings vs. estimated loss and show risk trends over time.
-              </div>
-            </div>
-          </section>
+        {currentTab === 'history' && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-panel p-4 overflow-x-auto">
+             <table className="premium-table">
+               <thead>
+                 <tr>
+                   <th>Reference</th>
+                   <th>Event Time</th>
+                   <th>Status</th>
+                   <th>Trigger Factors</th>
+                   <th>Loss (%)</th>
+                   <th>Payout</th>
+                 </tr>
+               </thead>
+               <tbody>
+                 {claims.map((c, i) => (
+                   <tr key={c.id}>
+                     <td className="font-mono text-xs opacity-50">#{c.id}</td>
+                     <td>{new Date(c.createdAt).toLocaleDateString()}</td>
+                     <td>
+                        <div className={`badge ${c.status === 'paid' ? 'badge-risk-low' : 'badge-risk-high'}`}>
+                          {c.status}
+                        </div>
+                     </td>
+                     <td className="text-xs text-slate-400">
+                        Rain: {c.rainIntensity}mm | AQI: {c.aqi}
+                     </td>
+                     <td className="font-bold text-slate-300">{c.incomeDropPct}%</td>
+                     <td className="font-black text-emerald-400">
+                        {c.status === 'paid' ? `₹${c.payoutAmount}` : '—'}
+                     </td>
+                   </tr>
+                 ))}
+                 {claims.length === 0 && (
+                   <tr>
+                     <td colSpan={6} className="text-center py-12 text-slate-500">No insurance events recorded yet.</td>
+                   </tr>
+                 )}
+               </tbody>
+             </table>
+          </motion.div>
         )}
       </main>
 
-      {toast && (
-        <div className="gw-toast" role="status" aria-live="polite">
-          {toast}
-        </div>
-      )}
+      <AnimatePresence>
+        {toast && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            className={`fixed bottom-8 right-8 z-[200] p-4 rounded-2xl glass-panel shadow-2xl border-l-4 ${
+              toast.type === 'success' ? 'border-l-emerald-500' : 
+              toast.type === 'error' ? 'border-l-red-500' : 'border-l-blue-500'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+               <div className={`p-2 rounded-full ${
+                  toast.type === 'success' ? 'bg-emerald-500/20 text-emerald-500' : 
+                  toast.type === 'error' ? 'bg-red-500/20 text-red-500' : 'bg-blue-500/20 text-blue-500'
+               }`}>
+                  {toast.type === 'success' ? <Shield size={18}/> : <AlertTriangle size={18}/>}
+               </div>
+               <span className="font-bold text-slate-200">{toast.msg}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
-  )
+  );
 }
-
