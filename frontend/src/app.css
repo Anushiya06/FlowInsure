@@ -38,8 +38,8 @@
 .z-200 { z-index: 200; }
 .fixed { position: fixed; }
 .top-8 { top: 2rem; }
-.left-1/2 { left: 50%; }
-.-translate-x-1/2 { transform: translateX(-50%); }
+.left-1\/2 { left: 50%; }
+.-translate-x-1\/2 { transform: translateX(-50%); }
 .rounded-xl { border-radius: 0.75rem; }
 .rounded-full { border-radius: 9999px; }
 .font-bold { font-weight: 700; }

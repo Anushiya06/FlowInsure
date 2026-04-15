@@ -84,25 +84,37 @@ app.post('/api/subscribe', (req, res) => {
   res.json(sub);
 });
 
-// 4. Manual/Simulator Trigger (Mocking Parametric Trigger)
-app.post('/api/simulate-disruption', (req, res) => {
-  const { userId, rain, aqi, incomeDrop } = req.body;
+// 4. Automated Smart Trigger (Integration with External APIs)
+app.post('/api/simulate-disruption', async (req, res) => {
+  const { userId, incomeDrop, useRealData } = req.body;
   const sub = subscriptions.find(s => s.userId === userId);
+  const user = users.find(u => u.id === userId);
   
   if (!sub || !sub.isSubscribed) {
     return res.status(400).json({ error: 'User is not subscribed' });
   }
 
+  let rain = req.body.rain;
+  let aqi = req.body.aqi;
+
+  if (useRealData) {
+     const city = user?.city || 'Mumbai';
+     const realData = await AIService.fetchEnvironmentData(city);
+     rain = realData.rain;
+     aqi = realData.aqi;
+  }
+
   const fraudFlags = AIService.detectFraud({ rainIntensity: rain, aqi, incomeDropPct: incomeDrop }, claims.length);
   const { triggerMatch, payout } = AIService.shouldAutoPay({ rainIntensity: rain, aqi, incomeDropPct: incomeDrop }, sub.payoutRulePct);
   
+  // Real ML logic sets status based on anomaly flags and triggers
   const status = fraudFlags.length > 0 ? 'blocked' : triggerMatch ? 'paid' : 'blocked';
 
   const claim: Claim = {
     id: `clm-${randomUUID().slice(0, 8)}`,
     userId,
     weekId: `2024-W${new Date().getMonth() + 1}`,
-    city: sub.riskLevel, // Simplified
+    city: sub.riskLevel, 
     rainIntensity: rain,
     aqi,
     incomeDropPct: incomeDrop,
@@ -114,10 +126,10 @@ app.post('/api/simulate-disruption', (req, res) => {
 
   claims.unshift(claim);
   
-  // Real-time notification
+  // Real-time notification via WebSockets
   io.emit('claim_updated', claim);
   
-  res.json(claim);
+  res.json({ ...claim, usedRealData: useRealData });
 });
 
 // 5. Claim History
@@ -129,7 +141,6 @@ app.get('/api/claims/:userId', (req, res) => {
 io.on('connection', (socket) => {
   console.log('Client connected through WebSockets for real-time triggers.');
   
-  // Simulation: Sudden Spike (Weather Event)
   socket.on('request_spike_simulation', () => {
     const spikeData = { city: 'Mumbai', rain: 92, aqi: 285, event: 'Monsoon Spike' };
     socket.emit('weather_spike', spikeData);

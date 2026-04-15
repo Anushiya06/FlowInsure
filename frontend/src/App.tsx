@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
 import { 
@@ -7,22 +7,32 @@ import {
   CloudRain, 
   Wind, 
   AlertTriangle, 
-  TrendingUp, 
-  History, 
-  Settings, 
-  ChevronRight,
+  TrendingUp,
   Zap,
   Lock,
   Loader2,
-  DollarSign
+  BarChart2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend
+} from 'recharts';
 import './app.css';
 
 const API_BASE = 'http://localhost:5000/api';
 const socket = io('http://localhost:5000');
 
-type Tab = 'dashboard' | 'subscription' | 'simulator' | 'history';
+type Tab = 'dashboard' | 'subscription' | 'simulator' | 'analytics' | 'history';
+
+const mockAnalyticsData = [
+  { day: 'Mon', BaseEarnings: 900, ProtectedPayout: 0, Severity: 10 },
+  { day: 'Tue', BaseEarnings: 950, ProtectedPayout: 0, Severity: 15 },
+  { day: 'Wed', BaseEarnings: 200, ProtectedPayout: 640, Severity: 85 }, 
+  { day: 'Thu', BaseEarnings: 850, ProtectedPayout: 0, Severity: 40 },
+  { day: 'Fri', BaseEarnings: 920, ProtectedPayout: 0, Severity: 25 },
+  { day: 'Sat', BaseEarnings: 1050, ProtectedPayout: 0, Severity: 5 },
+  { day: 'Sun', BaseEarnings: 1100, ProtectedPayout: 0, Severity: 10 },
+];
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<Tab>('dashboard');
@@ -44,7 +54,8 @@ export default function App() {
   const [sim, setSim] = useState({
     rain: 65,
     aqi: 180,
-    drop: 20
+    drop: 20,
+    useRealData: false  
   });
 
   const [alertData, setAlertData] = useState<any>(null);
@@ -98,7 +109,8 @@ export default function App() {
         userId,
         rain: sim.rain,
         aqi: sim.aqi,
-        incomeDrop: sim.drop
+        incomeDrop: sim.drop,
+        useRealData: sim.useRealData
       });
       console.log("Simulation Result:", data);
       
@@ -194,7 +206,7 @@ export default function App() {
 
         <nav className="app-nav">
           <div className="glass-panel p-1 flex gap-1">
-            {(['dashboard', 'subscription', 'simulator', 'history'] as Tab[]).map(t => (
+            {(['dashboard', 'subscription', 'simulator', 'analytics', 'history'] as Tab[]).map(t => (
               <button 
                 key={t}
                 onClick={() => setCurrentTab(t)}
@@ -302,16 +314,20 @@ export default function App() {
                   <CloudRain className="text-violet-500" /> Disruption Simulator
                 </h3>
                 <div className="space-y-8">
-                   <div className="input-group">
+                   <div className="flex items-center gap-3 mb-4 bg-violet-500/10 p-4 rounded-xl border border-violet-500/30">
+                      <input type="checkbox" id="realDataToggle" className="accent-violet-500 w-5 h-5 cursor-pointer" checked={sim.useRealData} onChange={e => setSim({...sim, useRealData: e.target.checked})} />
+                      <label htmlFor="realDataToggle" className="text-sm font-bold text-violet-300 cursor-pointer">Live API Mode: Fetch Real Weather & AQI</label>
+                   </div>
+                   <div className={`input-group transition-opacity ${sim.useRealData ? 'opacity-30 pointer-events-none' : ''}`}>
                       <div className="flex justify-between mb-2">
-                         <span className="input-label m-0">Rain Intensity</span>
+                         <span className="input-label m-0">Rain Intensity Override</span>
                          <span className="text-violet-500 font-black">{sim.rain}mm</span>
                       </div>
                       <input type="range" className="w-full accent-violet-500" min="0" max="100" value={sim.rain} onChange={e => setSim({...sim, rain: Number(e.target.value)})} />
                    </div>
-                   <div className="input-group">
+                   <div className={`input-group transition-opacity ${sim.useRealData ? 'opacity-30 pointer-events-none' : ''}`}>
                       <div className="flex justify-between mb-2">
-                         <span className="input-label m-0">Pollution (AQI)</span>
+                         <span className="input-label m-0">Pollution (AQI) Override</span>
                          <span className="text-emerald-500 font-black">{sim.aqi}</span>
                       </div>
                       <input type="range" className="w-full accent-emerald-500" min="50" max="400" value={sim.aqi} onChange={e => setSim({...sim, aqi: Number(e.target.value)})} />
@@ -367,6 +383,52 @@ export default function App() {
           </div>
         )}
 
+        {currentTab === 'analytics' && (
+           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+              <div className="glass-panel p-8">
+                 <h2 className="text-2xl font-black mb-6 flex items-center gap-2">
+                    <BarChart2 className="text-violet-500"/> Income Stability vs Climate Risk
+                 </h2>
+                 <div className="h-[400px] w-full">
+                   <ResponsiveContainer width="100%" height="100%">
+                     <AreaChart data={mockAnalyticsData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                       <defs>
+                         <linearGradient id="colorEarnings" x1="0" y1="0" x2="0" y2="1">
+                           <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                           <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                         </linearGradient>
+                         <linearGradient id="colorPayout" x1="0" y1="0" x2="0" y2="1">
+                           <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
+                           <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
+                         </linearGradient>
+                         <linearGradient id="colorSeverity" x1="0" y1="0" x2="0" y2="1">
+                           <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/>
+                           <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                         </linearGradient>
+                       </defs>
+                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                       <XAxis dataKey="day" stroke="#94a3b8" />
+                       <YAxis stroke="#94a3b8" />
+                       <RechartsTooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }} />
+                       <Legend />
+                       <Area type="monotone" dataKey="Severity" stroke="#ef4444" fillOpacity={1} fill="url(#colorSeverity)" />
+                       <Area type="monotone" dataKey="ProtectedPayout" stackId="1" stroke="#8b5cf6" fillOpacity={1} fill="url(#colorPayout)" />
+                       <Area type="monotone" dataKey="BaseEarnings" stackId="1" stroke="#10b981" fillOpacity={1} fill="url(#colorEarnings)" />
+                     </AreaChart>
+                   </ResponsiveContainer>
+                 </div>
+                 <div className="mt-6 flex justify-between items-center pt-4 border-t border-white/10">
+                   <div className="text-slate-400 text-sm">FlowInsure dynamically stabilized income to ₹840 during the Wednesday disruption event.</div>
+                   <div className="flex gap-4">
+                     <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-500 rounded-full"></div><span className="text-sm font-bold text-slate-300">Base</span></div>
+                     <div className="flex items-center gap-2"><div className="w-3 h-3 bg-violet-500 rounded-full"></div><span className="text-sm font-bold text-slate-300">Protected</span></div>
+                     <div className="flex items-center gap-2"><div className="w-3 h-3 bg-red-500 rounded-full"></div><span className="text-sm font-bold text-slate-300">Risk</span></div>
+                   </div>
+                 </div>
+              </div>
+           </motion.div>
+        )}
+
         {currentTab === 'history' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-panel p-4 overflow-x-auto">
              <table className="premium-table">
@@ -381,7 +443,7 @@ export default function App() {
                  </tr>
                </thead>
                <tbody>
-                 {claims.map((c, i) => (
+                 {claims.map((c) => (
                    <tr key={c.id}>
                      <td className="font-mono text-xs opacity-50">#{c.id}</td>
                      <td>{new Date(c.createdAt).toLocaleDateString()}</td>
